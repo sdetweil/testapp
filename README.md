@@ -15,7 +15,7 @@ every 15 seconds it will toggle between the two active servivces
 
 use nrfConnect, connect
 and write '1' (text mode) to the 9A64 characteristic, 
-  this will start the OTA (update over the air, via ble) service in addition to the two alredy created
+  this will start the OTA (update over the air, via ble) service in addition to the two already created
 ```
 connected
 write characteristic=0x9a64
@@ -31,3 +31,5 @@ crash
 ```
 assert failed: ble_svc_gap_init ble_svc_gap.c:302 (rc == 0)
 ``` 
+
+one thing to note, the server callback on disconnect doesn't happen..(serial print as 1st statement there)
