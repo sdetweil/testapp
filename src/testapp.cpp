@@ -456,7 +456,14 @@ void startOTAService()
     pAdvertising->stop();
     //BLEDevice::stopAdvertising();
   #endif
-
+  // disconnect the(any) connected clients
+  for (auto it: pServer->getPeerDevices()) {
+    pServer->disconnect(it);
+  }
+  while (pServer->getConnectedCount() > 0) {
+    yield();
+  }
+  // start the OTA service.
   OTAService = ArduinoBleOTA.begin(pServer, InternalStorage, HW_NAME_INFO.c_str(), HW_VER, SW_NAME.c_str(), SW_VER);
   ArduinoBleOTA.setUploadCallbacks( * (new myUploadCallbacks()));
   Sprintln("restart advertising after resetup");
