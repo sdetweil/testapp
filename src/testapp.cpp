@@ -39,8 +39,12 @@ unsigned long next=0;
 #if defined(USE_OTA)
   unsigned long  OtaDelay = (1 * 1000);
   unsigned long startOtaTime = 0;
-  bool OTARunning=false;
-  BLEService *OTAService=NULL;
+#define OTA_IDLE 0
+#define OTA_Running 1
+#define OTA_Pending 2
+  unsigned int OTARunning = OTA_IDLE;
+ 
+  BLEService *OTAService = NULL;
   void startOTAService(const char *value);
   #include <ArduinoBleOTA.h>
   #include <BleOtaUploadCallbacks.h>
@@ -67,6 +71,9 @@ BLEService* activeService[NUM_SERVICES] = {NULL, NULL};
 void startAdvertising();
 String uuids[NUM_SERVICES] ={"00000001"+UUIDEnd,"00000011"+UUIDEnd};
 unsigned char dummy=0;
+
+unsigned long nextScan = 0;
+unsigned scanDelay = 10000; // 10 seconds between start of scan cycle looking for app
 
 //
 // flags
@@ -235,32 +242,27 @@ class MyServerCallbacks: public BLEServerCallbacks {
       lastConnected = millis();
     };
 
-#if !defined(USE_NIMBLE)
-    void onDisconnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) {
-      BLEAddress remote_addr(param->disconnect.remote_bda);
-      lastConnected = 0;
-      Sprintln("disconnected");
-    }
-#endif
-
     void onDisconnect(BLEServer* pServer) {
-      Sprint("disconnect callback");
+      Sprintln("disconnect callback");
       deviceConnected = false;
       lastConnected = 0;     
-        if (advertising) {
-          Sprint("on disconnect start advertising= ");
-          if(!OTARunning)
-            Sprintln(activeService[status]->getUUID().toString().c_str());
-          else
-            Sprintln(OTAService->getUUID().toString().c_str());
-            #ifdef ESP32
-              pServer->getAdvertising()->start();
-              BLEDevice::startAdvertising();
-            #else
-              BLE.advertise();
-            #endif
+        if (advertising) {  // if we SHOULD be advertising
+          Sprintln("on disconnect");          
+          if (OTARunning == OTA_Running)
+          {
+            Sprintln("restart advertising ");
+              #ifdef ESP32
+                #ifdef USE_NIMBLE
+                pAdvertising->start();
+                #else
+                BLEDevice::startAdvertising();
+                #endif
+              #else
+                BLE.advertise();
+              #endif
+          }
         }
-      Sprintln("disconnected");
+      Sprintln("client disconnected");
     }
 };
 
@@ -404,30 +406,31 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 
 #endif
 
-
-
-
-void disconnectClient() {
+void disconnectClient()
+{
 
 #ifdef ESP32
-  /* ESP_LOGD(LOG_TAG, ">> disconnectClient. GATTS IF: %d. CONN ID: %d", m_gatts_if, m_connId);
-    if (m_gatts_if >= 0 and m_connId >= 0) {
-    esp_err_t result = ::esp_ble_gatts_close(m_gatts_if, m_connId);
-    if (result != ESP_OK) {
-      ESP_LOGE(LOG_TAG, "Disconnection FAILED. Code: %d.", result);
+#ifdef USE_NIMBLE
+    // disconnect the(any) connected clients
+    for (auto it : pServer->getPeerDevices())
+    {
+      pServer->disconnect(it);
     }
-    } else {
-    ESP_LOGD(LOG_TAG, "Can not disconnect Client.");
+    while (pServer->getConnectedCount() > 0)
+    {
+      yield();
     }
-
-    ESP_LOGD(LOG_TAG, "<< disconnectClient"); */
-
+#else
+    if (pClient != null)
+    {
+      pClient->disconnect();
+    }
+    delay(100);
+#endif
 #else
   BLE.disconnect();
 #endif
 } // disconnectClient
-
-
 
 #if USE_OTA
 
@@ -448,41 +451,44 @@ class  myUploadCallbacks :public BleOtaUploadCallbacks {
 };
 void startOTAService()
 {
+  OTARunning = OTA_Pending;
 #ifdef ESP32
-  #ifdef USE_NIMBLE
-    pAdvertising->stop();
-    pAdvertising->removeServiceUUID(activeService[status]->getUUID());
-  #else
-    pAdvertising->stop();
-    //BLEDevice::stopAdvertising();
-  #endif
+  advertising = false;
+#ifdef USE_NIMBLE
+  pAdvertising->stop();
+  Sprintf("OTA Service setup removing advertised UUID=");
+  Sprintln(activeService[status]->getUUID().toString().c_str());
+  pAdvertising->removeServiceUUID(activeService[status]->getUUID());
+#else
+  pAdvertising->stop();
+#endif
   // disconnect the(any) connected clients
-  for (auto it: pServer->getPeerDevices()) {
-    pServer->disconnect(it);
-  }
-  while (pServer->getConnectedCount() > 0) {
-    yield();
-  }
-  // start the OTA service.
+  disconnectClient();
+  // start the Over The Air update service
   OTAService = ArduinoBleOTA.begin(pServer, InternalStorage, HW_NAME_INFO.c_str(), HW_VER, SW_NAME.c_str(), SW_VER);
-  ArduinoBleOTA.setUploadCallbacks( * (new myUploadCallbacks()));
-  Sprintln("restart advertising after resetup");
-  OTARunning=true;
-  #if USE_NIMBLE
-   pAdvertising->addServiceUUID(OTAService->getUUID());
-   pAdvertising->start();
-  #else
-   Sprintln("seting OTA service as only");
-   pAdvertising->setServiceUUID(OTAService->getUUID());
-   pAdvertising->start();
-   //BLEDevice::startAdvertising();
-  #endif
-  Sprint("done startOTAService");
+  // lib creates service and does service.start(), but does not uuid
+      // auto* advertising = server->getAdvertising();
+      // advertising->addServiceUUID(BLE_OTA_SERVICE_UUID);
+   //  service->start();
+  OTARunning = OTA_Running;
+  ArduinoBleOTA.setUploadCallbacks(*(new myUploadCallbacks()));
+  Sprintln("restart advertising after OTA Service setup");
+  Sprintln("setting OTA service as only");
+#if USE_NIMBLE
+  //OTAService->start();
+  pAdvertising->addServiceUUID(OTAService->getUUID());
+  Sprint("added UUID to advertising, should be only=");
+  Sprintln(OTAService->getUUID().toString().c_str());
+  pAdvertising->start();
+  Sprintln("restart advertising");
+#else
+  pAdvertising->setServiceUUID(OTAService->getUUID());
+  pAdvertising->start();
+#endif
+  advertising = true;
 #else
 
 #endif
-
-
 }
 #endif
 void changeServiceUUID() {
@@ -518,6 +524,7 @@ BLEService *  setupService(int index) {
       Sprintln("ble server");
       pServer->setCallbacks(new MyServerCallbacks());
       Sprintln("setup ble server callbacks");
+      pServer->advertiseOnDisconnect(false);
     }
 
     Sprintln("after server create");
@@ -720,23 +727,25 @@ void loop() {
     startOtaTime = 0;
     startOTAService();
     }
-    if(OTARunning){
+    if(OTARunning == OTA_Running){
       ArduinoBleOTA.pull();
     }
   #endif
-  if(now>next && !OTARunning){
-    pAdvertising->stop();
-    Sprintln("toggling uuid");
-    status=!status;  // toggle
-    changeServiceUUID();
-    pAdvertising->start();
-    next = now+looptimeout;
-  }
+    if (now > next && OTARunning==OTA_IDLE && startOtaTime==0){
+      pAdvertising->stop();
+      Sprintln("toggling uuid");
+      status = !status; // toggle
+      changeServiceUUID();
+      pAdvertising->start();
+      next = now + looptimeout;
+    }
 
 #ifdef ESP32
   // if not advertising, we are still looking for our app
   //if(!advertising){
+
     // scan to see iff our app is around
+  if (now > nextScan && OTARunning == 0 && startOtaTime==0){
     BLEScanResults foundDevices = pBLEScanner->start(2 /*scanTimeout/1000*/, true);
     //Sprint("Devices found: ");
     //Sprintln(foundDevices.getCount());
@@ -763,6 +772,8 @@ void loop() {
     }
     pBLEScanner->clearResults();
     pBLEScanner->stop();
+    nextScan = now + scanDelay;
+  }
   //} 
 #endif
 
@@ -802,7 +813,7 @@ void loop() {
     // do stuff here on connecting
     oldDeviceConnected = deviceConnected;
   }
-  if(!OTARunning){
+  if(OTARunning==OTA_IDLE){
     if( (advertising == true) && (deviceConnected == false) && ((lastHeard + timeout) < now) ) {
       Sprintln("haven't heard our app for a while, stop advertising");
       stopAdvertising();
