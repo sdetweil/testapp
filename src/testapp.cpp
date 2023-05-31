@@ -248,8 +248,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
       lastConnected = 0;     
         if (advertising) {  // if we SHOULD be advertising
           Sprintln("on disconnect");          
-          if (OTARunning == OTA_Running)
-          {
+          if (OTARunning == OTA_Running){
             Sprintln("restart advertising ");
               #ifdef ESP32
                 #ifdef USE_NIMBLE
@@ -420,13 +419,14 @@ void disconnectClient()
     {
       yield();
     }
+
 #else
     if (pClient != null)
     {
       pClient->disconnect();
     }
-    delay(100);
 #endif
+    delay(100);
 #else
   BLE.disconnect();
 #endif
@@ -454,40 +454,37 @@ void startOTAService()
   OTARunning = OTA_Pending;
 #ifdef ESP32
   advertising = false;
-#ifdef USE_NIMBLE
   pAdvertising->stop();
-  Sprintf("OTA Service setup removing advertised UUID=");
+  Sprintf("removing advertised UUID=");
   Sprintln(activeService[status]->getUUID().toString().c_str());
   pAdvertising->removeServiceUUID(activeService[status]->getUUID());
+  delay(50);
+#ifdef USE_NIMBLE
+  Sprintln("nimble adding OTA service");
+  pServer->addService(OTAService);
 #else
-  pAdvertising->stop();
+  // start the Over The Air update service
+  Sprintln("NOT nimble creating OTA service");
+  OTAService = ArduinoBleOTA.begin(pServer, InternalStorage, HW_NAME_INFO.c_str(), HW_VER, SW_NAME.c_str(), SW_VER);
 #endif
   // disconnect the(any) connected clients
   disconnectClient();
-  // start the Over The Air update service
-  OTAService = ArduinoBleOTA.begin(pServer, InternalStorage, HW_NAME_INFO.c_str(), HW_VER, SW_NAME.c_str(), SW_VER);
-  // lib creates service and does service.start(), but does not uuid
-      // auto* advertising = server->getAdvertising();
-      // advertising->addServiceUUID(BLE_OTA_SERVICE_UUID);
-   //  service->start();
   OTARunning = OTA_Running;
   ArduinoBleOTA.setUploadCallbacks(*(new myUploadCallbacks()));
   Sprintln("restart advertising after OTA Service setup");
   Sprintln("setting OTA service as only");
-#if USE_NIMBLE
-  //OTAService->start();
-  pAdvertising->addServiceUUID(OTAService->getUUID());
   Sprint("added UUID to advertising, should be only=");
   Sprintln(OTAService->getUUID().toString().c_str());
-  pAdvertising->start();
-  Sprintln("restart advertising");
+#if USE_NIMBLE
+  pAdvertising->addServiceUUID(OTAService->getUUID());
 #else
   pAdvertising->setServiceUUID(OTAService->getUUID());
-  pAdvertising->start();
 #endif
+  Sprintln("restart advertising");
+  pAdvertising->start();
   advertising = true;
 #else
-
+  // non esp32 , aka arduino
 #endif
 }
 #endif
@@ -697,6 +694,15 @@ void setup() {
   //pAdvertising->addServiceUUID(activeService[status]->getUUID());
   pAdvertising->setScanResponse(true);
 #endif
+  #ifdef USE_NIMBLE
+    #ifdef USE_OTA
+      // create the service
+      OTAService = ArduinoBleOTA.begin(pServer, InternalStorage, HW_NAME_INFO.c_str(), HW_VER, SW_NAME.c_str(), SW_VER);
+      // but remove it til needed... Nimble library requirement
+      pServer->removeService(OTAService, false);
+      pAdvertising->removeServiceUUID(OTAService->getUUID());
+    #endif
+  #endif
   //pAdvertising->setMinPreferred(0x00);  // set value to 0x00 to not advertise this parameter
   Sprintln("after advertise setup ");
 #if AdvertiseAtStartup
